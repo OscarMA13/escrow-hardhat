@@ -1,3 +1,4 @@
+import server from './server';
 import { ethers } from 'ethers';
 import { useEffect, useState } from 'react';
 import deploy from './deploy';
@@ -10,10 +11,22 @@ export async function approve(escrowContract, signer) {
   await approveTxn.wait();
 }
 
+export async function refund(escrowContract, signer) {
+  const refundTxn = await escrowContract.connect(signer).refund();
+  await refundTxn.wait();
+}
+
+export async function toggleActionability(escrowContract, signer) {
+  const toggleAction = await escrowContract.connect(signer).toggleActionability();
+  await toggleAction.wait();
+}
+
 function App() {
   const [escrows, setEscrows] = useState([]);
   const [account, setAccount] = useState();
   const [signer, setSigner] = useState();
+  const [currencyType, setCurrencyType] = useState("ETH");
+  const [currencyAmt, setCurrencyAmt] = useState("");
 
   useEffect(() => {
     async function getAccounts() {
@@ -26,12 +39,41 @@ function App() {
     getAccounts();
   }, [account]);
 
+  useEffect(() => {
+    async function getEscrows() {
+
+      await server.get("http://localhost:5000/escrows").then((response) => {
+        setEscrows(response.data)
+        console.log(response);
+      })
+    }
+    getEscrows();
+  }, []);
+
+  const handleCurrencyAmtChange = (event) => {
+    setCurrencyAmt(event.target.value);
+  }
+
+  async function toggleCurrencyType() {
+    if (currencyType === "WEI") {
+      setCurrencyType("ETH");
+      setCurrencyAmt(currencyAmt / 1000000000000000000);
+    } else {
+      setCurrencyType("WEI");
+      setCurrencyAmt(currencyAmt * 1000000000000000000);
+    }
+  }
+
   async function newContract() {
     const beneficiary = document.getElementById('beneficiary').value;
     const arbiter = document.getElementById('arbiter').value;
-    const value = ethers.BigNumber.from(document.getElementById('wei').value);
-    const escrowContract = await deploy(signer, arbiter, beneficiary, value);
+    let tmpValue = document.getElementById('wei').value;
 
+    const value = currencyType === "ETH" ?
+      (ethers.BigNumber.from(ethers.utils.parseEther(tmpValue, "ether"))) :
+      (ethers.BigNumber.from(tmpValue));
+
+    const escrowContract = await deploy(signer, arbiter, beneficiary, value);
 
     const escrow = {
       address: escrowContract.address,
@@ -40,21 +82,47 @@ function App() {
       value: value.toString(),
       handleApprove: async () => {
         escrowContract.on('Approved', () => {
-          document.getElementById(escrowContract.address).className =
-            'complete';
-          document.getElementById(escrowContract.address).innerText =
-            "✓ It's been approved!";
+          document.getElementById(escrowContract.address + "Approve").className = 'complete';
+          document.getElementById(escrowContract.address + "Refund").className = 'invalid';
+          document.getElementById(escrowContract.address + "Toggle").classList.add("invalid");
+          document.getElementById(escrowContract.address + "Approve").innerText = "✓ It's been approved!";
         });
 
         await approve(escrowContract, signer);
       },
+      handleRefund: async () => {
+        escrowContract.on('Refunded', () => {
+          document.getElementById(escrowContract.address + "Refund").className = 'complete';
+          document.getElementById(escrowContract.address + "Approve").className = 'invalid';
+          document.getElementById(escrowContract.address + "Toggle").classList.add("invalid");
+          document.getElementById(escrowContract.address + "Refund").innerText = "🗴 It's been refunded!";
+        });
+
+        await refund(escrowContract, signer);
+      },
+      handleToggleActionability: async () => {
+        escrowContract.on("ActionabilityChanged", (actionability) => {
+          if (actionability) {
+            document.getElementById(escrowContract.address + "Approve").classList.remove('disabled');
+            document.getElementById(escrowContract.address + "Refund").classList.remove('disabled');
+          } else {
+            document.getElementById(escrowContract.address + "Approve").classList.add("disabled");
+            document.getElementById(escrowContract.address + "Refund").classList.add("disabled");
+          }
+        });
+        await toggleActionability(escrowContract, signer);
+      }
     };
+
+    await server.post("http://localhost:5000/escrows", { escrow }).then((response) => {
+      console.log(response);
+    })
 
     setEscrows([...escrows, escrow]);
   }
 
   return (
-    <>
+    <div className="appContainer">
       <div className="contract">
         <h1> New Contract </h1>
         <label>
@@ -68,8 +136,12 @@ function App() {
         </label>
 
         <label>
-          Deposit Amount (in Wei)
-          <input type="text" id="wei" />
+          Deposit Amount (<span className="currencyType" onClick={(e) => {
+            e.preventDefault();
+            toggleCurrencyType();
+
+          }}>in {currencyType}</span>)
+          <input type="text" id="wei" onChange={handleCurrencyAmtChange} value={currencyAmt} />
         </label>
 
         <div
@@ -94,7 +166,7 @@ function App() {
           })}
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
